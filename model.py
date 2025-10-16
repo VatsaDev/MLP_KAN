@@ -175,7 +175,7 @@ class Block(nn.Module):
 
         if l_type == "MLP":
             self.block = MLP(config)
-        if l_type == "KAN"
+        if l_type == "KAN":
             self.block = KAN(config)
 
     def forward(self, x):
