@@ -130,6 +130,8 @@ class BSpline(nn.Module):
 class KANLayer(nn.Module):
     def __init__(self, in_dim, out_dim, num_knots=16):
         super().__init__()
+        self.in_dim_check = in_dim # Store it to print later
+        #print(f"KANLayer initialized with in_dim={in_dim}")
         # one spline per edge f_ij(x)
         self.splines = nn.ModuleList([
             nn.ModuleList([BSpline(num_knots=num_knots) for _ in range(in_dim)])
@@ -139,16 +141,39 @@ class KANLayer(nn.Module):
         self.alpha = nn.Parameter(torch.randn(out_dim, in_dim))
 
     def forward(self, x):
-        # x: (batch, in_dim)
+        # trying to make this work on last dim of 3d, instead of 2d
+        current_shape = x.shape
+        if len(current_shape) == 3: # If input is (B, S, E)
+            # Reshape to (B*S, E) for processing
+            batch_size, seq_len, in_dim_actual = current_shape
+            x_reshaped = x.view(-1, in_dim_actual)
+        elif len(current_shape) == 2: # If input is (B, E)
+            batch_size, in_dim_actual = current_shape
+            seq_len = 1 # Dummy seq_len for consistent output shape
+            x_reshaped = x
+        else:
+            raise ValueError(f"Unsupported input shape: {current_shape}")
+
+        if in_dim_actual != self.in_dim_check:
+             raise ValueError(f"Input dimension mismatch! KANLayer expects {self.in_dim_check}, but received {in_dim_actual}")
+
         outs = []
         for j, row in enumerate(self.splines):
             yj = 0
             for i, spline in enumerate(row):
-                base = self.alpha[j, i] * x[:, i]
-                spline_out = spline(x[:, i])
+                # Now operate on the reshaped tensor x_reshaped
+                base = self.alpha[j, i] * x_reshaped[:, i]
+                spline_out = spline(x_reshaped[:, i])
                 yj += base + spline_out
             outs.append(yj)
-        return torch.stack(outs, dim=-1)
+
+        output_reshaped = torch.stack(outs, dim=-1) # (B*S, out_dim)
+
+        if len(current_shape) == 3:
+            # Reshape back to (B, S, out_dim)
+            return output_reshaped.view(batch_size, seq_len, self.alpha.shape[0])
+        else: # len(current_shape) == 2
+            return output_reshaped
 
 class KAN(nn.Module):
     def __init__(self, config):
@@ -159,6 +184,7 @@ class KAN(nn.Module):
         self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x):
+        #print(f"Shape of x before fc1: {x.shape}")
         x = self.fc1(x)
         x = F.silu(x)  # adds a global nonlinearity, somewhat ruins the interp
         x = self.fc2(x)
